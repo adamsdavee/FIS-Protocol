@@ -122,6 +122,11 @@ contract SavingsContract {
         i_owner = msg.sender;
     }
 
+    modifier onlyOwner() {
+        require(msg.sender == i_owner, "Only the owner can call this function");
+        _;
+    }
+
     // set admin to change investment goals
     // Delete investments
 
@@ -334,7 +339,7 @@ contract SavingsContract {
         uint256 _depositPrice,
         uint256 _duration,
         uint256 _percentInterest
-    ) external {
+    ) external onlyOwner {
         // Make it only owner
         require(
             _percentInterest >= 10 && _percentInterest <= 20,
@@ -394,7 +399,7 @@ contract SavingsContract {
 
     // Customer joins investment
 
-    // Admin disburses profit
+    // Admin disburses profit #onlyOwner
 
     // Methods
     function belongToGroup(uint id) internal view returns (bool) {
@@ -475,6 +480,26 @@ contract SavingsContract {
 
     function getAllInvestments() external view returns (Investment[] memory) {
         return allInvestments;
+    }
+
+    function getInvestmentById(
+        uint id
+    ) external view returns (Investment memory) {
+        return hashInvestment[id];
+    }
+
+    function getAllUserInvestments() external returns (Investment[] memory) {
+        uint256[] memory allUserInvestmentsIds = userAddressToUserData[
+            msg.sender
+        ].investments;
+        Investment[] memory allUserInvestments = new Investment[](
+            allUserInvestmentsIds.length
+        );
+        for (uint i = 0; i < allUserInvestmentsIds.length; i++) {
+            allUserInvestments[i] = hashInvestment[allUserInvestmentsIds[i]];
+        }
+
+        return allUserInvestments;
     }
 
     // function getTokenStatus() public view returns(uint256, uint256) {
