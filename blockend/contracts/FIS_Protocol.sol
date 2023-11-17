@@ -9,15 +9,20 @@ interface MintingInterface {
     function mint(address account, uint256 amount) external;
 }
 
-contract SavingsContract {
-    uint256 public groupCount;
+error FundMe__notOwner();
+error NotOwner();
+error INSUFFICIENT_FUNDS();
+
+contract FISContract {
+    uint256 private groupCount;
     address private immutable i_owner;
 
-    IERC20 public piggyToken;
-    MintingInterface public minter;
+    IERC20 private piggyToken;
+    MintingInterface private minter;
     uint256 private rate = 1;
     uint256 private percentageRewardPerDay = 2;
     uint256 private investmentCount;
+    uint256 private investmentWallet;
 
     enum GroupVisibility {
         CIRCLE,
@@ -75,25 +80,24 @@ contract SavingsContract {
         address[] investmentParticipants;
         bool open;
         Status status;
+        uint256 totalDeposit;
     }
 
-    mapping(uint => Group) public groupById;
+    mapping(uint => Group) private groupById;
 
     mapping(address => mapping(address => TokenSavingsData))
-        public userAddressToTokenToData;
+        private userAddressToTokenToData;
 
-    mapping(address => User) public userAddressToUserData;
+    mapping(address => User) private userAddressToUserData;
 
-    mapping(address => Investment) public userInvestments;
+    mapping(address => Investment) private userInvestments;
 
-    mapping(uint256 => Investment) public hashInvestment;
-
-    mapping(address => uint256) public Owner;
+    mapping(uint256 => Investment) private idToInvestment;
 
     // Array
 
-    Group[] public allGroups;
-    Investment[] public allInvestments;
+    Group[] private allGroups;
+    Investment[] private allInvestments;
 
     event SaveToken(
         address indexed tokenAddress,
@@ -115,7 +119,10 @@ contract SavingsContract {
     event CircleAdded(bool circleMemberAdded);
     event GroupJoined(Group groupDetails);
     event TelosWithdrawn(uint256 amount);
+    event TokensWithdrawn(uint256 amount);
+    event FISWithdrawn(uint256 amount);
     event LeftGroup(Group groupDetails);
+    event InvestmentWithdrawn(uint256 investmentWithdrawn);
 
     constructor(address tokenAddress) {
         minter = MintingInterface(tokenAddress);
@@ -123,7 +130,7 @@ contract SavingsContract {
     }
 
     modifier onlyOwner() {
-        require(msg.sender == i_owner, "Only the owner can call this function");
+        if (msg.sender == i_owner) revert NotOwner();
         _;
     }
 
@@ -135,10 +142,10 @@ contract SavingsContract {
         uint256 amount,
         uint duration
     ) external {
-        require(amount > 0, "Include amount!");
+        if (amount > 0) revert INSUFFICIENT_FUNDS();
         IERC20 allTokens = IERC20(tokenAddress);
         uint allowance = allTokens.allowance(msg.sender, address(this));
-        require(allowance >= amount, "Token transfer not approved");
+        if (allowance >= amount) revert FundMe__notOwner();
 
         userAddressToTokenToData[msg.sender][tokenAddress].saveDuration =
             block.timestamp +
@@ -177,7 +184,7 @@ contract SavingsContract {
     }
 
     function createGroup(
-        uint256 _targetTime,
+        uint256 _duration,
         uint256 _targetAmount,
         GroupVisibility _visibility,
         string calldata _title,
@@ -185,10 +192,11 @@ contract SavingsContract {
         uint _category
     ) external {
         groupCount++;
+        // _duration = (_duration * 1 Days);
 
         groupById[groupCount] = Group(
             groupCount,
-            _targetTime,
+            _duration,
             _targetAmount,
             _visibility,
             _title,
@@ -200,13 +208,13 @@ contract SavingsContract {
         );
 
         User storage groupOwner = userAddressToUserData[msg.sender];
-        // groupOwner.groups.push(Group(groupCount, _targetTime, _targetAmount, _visibility));
+        // groupOwner.groups.push(Group(groupCount, _duration, _targetAmount, _visibility));
         groupOwner.groups.push(groupCount);
 
         emit GroupCreated(
             Group(
                 groupCount,
-                _targetTime,
+                _duration,
                 _targetAmount,
                 _visibility,
                 _title,
@@ -268,28 +276,23 @@ contract SavingsContract {
     function leaveGroup(uint id) external {
         bool verify = belongToGroup(id);
         if (!verify) revert("User does not belong!");
-        User storage UpdatingUserData = userAddressToUserData[msg.sender];
-        Group storage addingUserToGroup = groupById[id];
-        // Delete user from array
-
-        emit LeftGroup(addingUserToGroup);
-    }
-
-    function claimRewards() external {
-        User storage userData = userAddressToUserData[msg.sender];
-
-        address[] memory addressOfUserTokens = userData.tokens;
-        for (uint i = 0; i < addressOfUserTokens.length; i++) {
-            TokenSavingsData storage tokenData = userAddressToTokenToData[
-                msg.sender
-            ][addressOfUserTokens[i]];
-            uint256 newRewards = (tokenData.tokenBalance *
-                (block.timestamp - tokenData.timeSaved) *
-                percentageRewardPerDay);
-            userData.rewardsEarned += newRewards;
-            tokenData.timeSaved = block.timestamp;
-            tokenData.tokenRewards += newRewards;
+        uint256[] storage updatingUserData = userAddressToUserData[msg.sender]
+            .groups;
+        address[] storage removeUser = groupById[id].groupMembers;
+        for (uint i = 0; i < updatingUserData.length; i++) {
+            if (updatingUserData[i] == id) {
+                delete updatingUserData[i];
+                break;
+            }
         }
+        for (uint i = 0; i < removeUser.length; i++) {
+            if (removeUser[i] == msg.sender) {
+                delete removeUser[i];
+                break;
+            }
+        }
+
+        emit LeftGroup(groupById[id]);
     }
 
     function withdrawTelos(uint amount) external {
@@ -316,21 +319,26 @@ contract SavingsContract {
         IERC20 token = IERC20(tokenAddress);
         token.transfer(msg.sender, amount);
 
-        // Make it to be 0 like rewardsEarnes
-
-        // emit BalanceWithdrawn(msg.sender, amount);
+        emit TokensWithdrawn(amount);
     }
 
-    function withdrawTokenRewards(uint tokenAddress, uint amount) external {
-        uint totalRewards = userAddressToUserData[msg.sender].rewardsEarned;
-        require((totalRewards * 1e18) >= amount, "Insufficient funds");
+    function withdrawTokenRewards(
+        address tokenAddress,
+        uint256 amount
+    ) external {
+        require(
+            userAddressToUserData[msg.sender].rewardsEarned >= amount,
+            "Insufficient funds"
+        );
         unchecked {
             userAddressToUserData[msg.sender].rewardsEarned -= amount;
+            userAddressToTokenToData[msg.sender][tokenAddress]
+                .tokenBalance -= amount;
         }
 
         minter.mint(msg.sender, amount);
 
-        // emit BalanceWithdrawn(msg.sender, amount);
+        emit FISWithdrawn(amount);
     }
 
     function createInvestment(
@@ -346,7 +354,7 @@ contract SavingsContract {
             "Not in percent range"
         );
         investmentCount++;
-        hashInvestment[investmentCount] = Investment(
+        idToInvestment[investmentCount] = Investment(
             investmentCount,
             _title,
             _description,
@@ -355,7 +363,8 @@ contract SavingsContract {
             _percentInterest,
             new address[](0),
             true,
-            Status.IN_PROGRESS
+            Status.IN_PROGRESS,
+            0
         );
         allInvestments.push(
             Investment(
@@ -367,39 +376,88 @@ contract SavingsContract {
                 _percentInterest,
                 new address[](0),
                 true,
-                Status.IN_PROGRESS
+                Status.IN_PROGRESS,
+                0
             )
         );
-    } // another contract
-
-    function userJoinsInvestment(uint id) external {
-        // User storage addUserToInvestment = userAddressToTokenToData[msg.sender][tokenAddress];
-        User storage userJoiningInvestment = userAddressToUserData[msg.sender];
-        uint256[] memory userInvestmentsDetails = userJoiningInvestment
-            .investments;
-        for (uint i = 0; i < userInvestmentsDetails.length; i++) {
-            bool verify = false;
-            if (userInvestmentsDetails[i] == id) verify = true;
-            if (verify) revert("User exists");
-        }
-        require(
-            userJoiningInvestment.telosBalance ==
-                hashInvestment[id].depositPrice,
-            "Insufficient funds"
-        );
-
-        userJoiningInvestment.investments.push(id);
-        hashInvestment[id].investmentParticipants.push(msg.sender);
-
-        // add to investment participants
-        // Owner[i_owner] +=
-
-        // transfer collateral
     }
 
     // Customer joins investment
+    function invest(uint id) external {
+        User storage user = userAddressToUserData[msg.sender];
+        uint256[] memory userInvestmentsIds = user.investments;
+        for (uint i = 0; i < userInvestmentsIds.length; i++) {
+            bool verify = false;
+            if (userInvestmentsIds[i] == id) verify = true;
+            if (verify) revert("User exists");
+        }
+        require(!(idToInvestment[id].open), "Not available");
+        require(
+            user.telosBalance >= idToInvestment[id].depositPrice,
+            "Insufficient funds"
+        );
+
+        user.investments.push(id);
+        idToInvestment[id].investmentParticipants.push(msg.sender);
+
+        // add to investmentWallet
+        investmentWallet += idToInvestment[id].depositPrice;
+
+        // transfer collateral
+        user.telosBalance -= idToInvestment[id].depositPrice;
+        user.investmentCollateral += idToInvestment[id].depositPrice;
+    }
 
     // Admin disburses profit #onlyOwner
+    function disburseProfit(uint256 id) external payable {
+        Investment storage investment = idToInvestment[id];
+        address[] memory owners = investment.investmentParticipants;
+        require(investment.open, "Investment still open");
+        require(
+            investment.status == Status.IN_PROGRESS,
+            "Investment not success or failed"
+        );
+        uint256 unitProfit = calcDisburseProfit(
+            investment.depositPrice,
+            investment.percentInterest
+        );
+        uint256 totalProfit = unitProfit * owners.length;
+
+        for (uint i = 0; i < owners.length; i++) {
+            User storage user = userAddressToUserData[owners[i]];
+            if (investment.status == Status.SUCCESS) {
+                if (msg.value != totalProfit) revert INSUFFICIENT_FUNDS();
+                user.telosBalance += unitProfit;
+                user.investmentCollateral -= investment.depositPrice;
+            }
+            if (investment.status == Status.FAILED) {
+                user.rewardsEarned += user.investmentCollateral;
+                user.investmentCollateral -= investment.depositPrice;
+            }
+        }
+    }
+
+    // change status of investment and open or not of the investment
+    function changeInvestmentStatus(
+        uint256 id,
+        bool _open,
+        Status _status
+    ) external onlyOwner {
+        Investment storage investment = idToInvestment[id];
+        investment.open = _open;
+        investment.status = _status;
+    }
+
+    function withdrawForInvestment(uint amount) external onlyOwner {
+        require(investmentWallet >= amount, "Insufficient funds");
+        unchecked {
+            investmentWallet -= amount;
+        }
+        (bool success, ) = msg.sender.call{value: amount}("");
+        require(success, "Transfer failed");
+
+        emit InvestmentWithdrawn(amount);
+    }
 
     // Methods
     function belongToGroup(uint id) internal view returns (bool) {
@@ -463,7 +521,7 @@ contract SavingsContract {
 
     function getBalanceOfContract(
         address tokenAddress
-    ) public view returns (uint256) {
+    ) external view returns (uint256) {
         IERC20 balanceOfTokenInContract = IERC20(tokenAddress);
         return balanceOfTokenInContract.balanceOf(address(this));
     }
@@ -485,10 +543,14 @@ contract SavingsContract {
     function getInvestmentById(
         uint id
     ) external view returns (Investment memory) {
-        return hashInvestment[id];
+        return idToInvestment[id];
     }
 
-    function getAllUserInvestments() external returns (Investment[] memory) {
+    function getAllUserInvestments()
+        external
+        view
+        returns (Investment[] memory)
+    {
         uint256[] memory allUserInvestmentsIds = userAddressToUserData[
             msg.sender
         ].investments;
@@ -496,10 +558,23 @@ contract SavingsContract {
             allUserInvestmentsIds.length
         );
         for (uint i = 0; i < allUserInvestmentsIds.length; i++) {
-            allUserInvestments[i] = hashInvestment[allUserInvestmentsIds[i]];
+            allUserInvestments[i] = idToInvestment[allUserInvestmentsIds[i]];
         }
 
         return allUserInvestments;
+    }
+
+    function getInvestmentWallet() external view returns (uint256) {
+        return investmentWallet;
+    }
+
+    // pure function to calc rent
+    function calcDisburseProfit(
+        uint256 depositPrice,
+        uint256 percentInterest
+    ) internal pure returns (uint256) {
+        uint256 totalProfit = depositPrice + (percentInterest * depositPrice);
+        return totalProfit;
     }
 
     // function getTokenStatus() public view returns(uint256, uint256) {

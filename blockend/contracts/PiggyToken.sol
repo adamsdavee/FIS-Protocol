@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 contract TestingPig is ERC20, AccessControl {
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
-    constructor() ERC20("PIGGY", "PGY") {
+    constructor() ERC20("FIS COIN", "FIS") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(MINTER_ROLE, msg.sender);
     }
