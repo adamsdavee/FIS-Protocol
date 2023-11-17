@@ -2,7 +2,8 @@
 
 pragma solidity ^0.8.7;
 
-// import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+// contract address: 0xB85Ec3a47a40f8e2fAfA89869BF63deAeb34e4c3
+
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface MintingInterface {
@@ -12,12 +13,16 @@ interface MintingInterface {
 error FundMe__notOwner();
 error NotOwner();
 error INSUFFICIENT_FUNDS();
+error USER_EXISTS();
+error NOT_MEMBER();
+error IN_PROGRESS();
+error FAILED();
+error NOT_IN_PERCENT_RANGE();
+error NOT_AVAILABLE();
 
 contract FISContract {
     uint256 private groupCount;
     address private immutable i_owner;
-
-    IERC20 private piggyToken;
     MintingInterface private minter;
     uint256 private rate = 1;
     uint256 private percentageRewardPerDay = 2;
@@ -49,9 +54,9 @@ contract FISContract {
         uint256 telosDuration;
         uint256 timeSaved;
         address[] tokens;
-        uint256 rewardsEarned; // tracking (total)
-        uint256[] groups; // Store groups that we are part of
-        address[] circle; // add the People to his circle so that they will want to save when he creates a group
+        uint256 rewardsEarned;
+        uint256[] groups;
+        address[] circle;
         uint256 Goal;
         uint256 investmentCollateral;
         uint256[] investments;
@@ -94,8 +99,6 @@ contract FISContract {
 
     mapping(uint256 => Investment) private idToInvestment;
 
-    // Array
-
     Group[] private allGroups;
     Investment[] private allInvestments;
 
@@ -134,15 +137,12 @@ contract FISContract {
         _;
     }
 
-    // set admin to change investment goals
-    // Delete investments
-
     function saveTokens(
         address tokenAddress,
         uint256 amount,
         uint duration
     ) external {
-        if (amount > 0) revert INSUFFICIENT_FUNDS();
+        if (amount == 0) revert INSUFFICIENT_FUNDS();
         IERC20 allTokens = IERC20(tokenAddress);
         uint allowance = allTokens.allowance(msg.sender, address(this));
         if (allowance >= amount) revert FundMe__notOwner();
@@ -165,7 +165,7 @@ contract FISContract {
     }
 
     function saveTelos(uint256 duration) external payable {
-        require(msg.value > 0, "No money sent");
+        if (msg.value == 0) revert INSUFFICIENT_FUNDS();
         userAddressToUserData[msg.sender].telosBalance += msg.value;
         userAddressToUserData[msg.sender].telosDuration = duration;
         userAddressToUserData[msg.sender].timeSaved = block.timestamp;
@@ -192,7 +192,7 @@ contract FISContract {
         uint _category
     ) external {
         groupCount++;
-        // _duration = (_duration * 1 Days);
+        _duration = (_duration * 1 days) + block.timestamp;
 
         groupById[groupCount] = Group(
             groupCount,
@@ -208,8 +208,22 @@ contract FISContract {
         );
 
         User storage groupOwner = userAddressToUserData[msg.sender];
-        // groupOwner.groups.push(Group(groupCount, _duration, _targetAmount, _visibility));
         groupOwner.groups.push(groupCount);
+
+        allGroups.push(
+            Group(
+                groupCount,
+                _duration,
+                _targetAmount,
+                _visibility,
+                _title,
+                _description,
+                _category,
+                new address[](0),
+                msg.sender,
+                block.timestamp
+            )
+        );
 
         emit GroupCreated(
             Group(
@@ -245,7 +259,7 @@ contract FISContract {
 
     function joinGroup(uint id) external {
         bool verify = belongToGroup(id);
-        if (verify) revert("address exists!");
+        if (verify) revert USER_EXISTS();
         User storage UpdatingUserData = userAddressToUserData[msg.sender];
         Group storage addingUserToGroup = groupById[id];
 
@@ -267,7 +281,7 @@ contract FISContract {
             if (foundCircleMember) {
                 UpdatingUserData.groups.push(id);
                 addingUserToGroup.groupMembers.push(msg.sender);
-            } else revert("Not a circle member");
+            } else revert NOT_MEMBER();
         }
 
         emit GroupJoined(addingUserToGroup);
@@ -275,7 +289,7 @@ contract FISContract {
 
     function leaveGroup(uint id) external {
         bool verify = belongToGroup(id);
-        if (!verify) revert("User does not belong!");
+        if (!verify) revert NOT_MEMBER();
         uint256[] storage updatingUserData = userAddressToUserData[msg.sender]
             .groups;
         address[] storage removeUser = groupById[id].groupMembers;
@@ -298,12 +312,12 @@ contract FISContract {
     function withdrawTelos(uint amount) external {
         // require time and calc charge
         uint balance = userAddressToUserData[msg.sender].telosBalance;
-        require(balance >= amount, "Insufficient funds");
+        if (amount > balance) revert INSUFFICIENT_FUNDS();
         unchecked {
             userAddressToUserData[msg.sender].telosBalance -= amount;
         }
         (bool success, ) = msg.sender.call{value: amount}("");
-        require(success, "Transfer failed");
+        if (!success) revert FAILED();
 
         emit TelosWithdrawn(amount);
     }
@@ -311,7 +325,7 @@ contract FISContract {
     function withdrawTokens(address tokenAddress, uint amount) external {
         uint balance = userAddressToTokenToData[msg.sender][tokenAddress]
             .tokenBalance;
-        require(balance >= amount, "Insufficient funds");
+        if (amount > balance) revert INSUFFICIENT_FUNDS();
         unchecked {
             userAddressToTokenToData[msg.sender][tokenAddress]
                 .tokenBalance -= amount;
@@ -326,10 +340,8 @@ contract FISContract {
         address tokenAddress,
         uint256 amount
     ) external {
-        require(
-            userAddressToUserData[msg.sender].rewardsEarned >= amount,
-            "Insufficient funds"
-        );
+        if (amount >= userAddressToUserData[msg.sender].rewardsEarned)
+            revert INSUFFICIENT_FUNDS();
         unchecked {
             userAddressToUserData[msg.sender].rewardsEarned -= amount;
             userAddressToTokenToData[msg.sender][tokenAddress]
@@ -347,27 +359,10 @@ contract FISContract {
         uint256 _depositPrice,
         uint256 _duration,
         uint256 _percentInterest
-    ) external onlyOwner {
-        // Make it only owner
-        require(
-            _percentInterest >= 10 && _percentInterest <= 20,
-            "Not in percent range"
-        );
-        investmentCount++;
-        idToInvestment[investmentCount] = Investment(
-            investmentCount,
-            _title,
-            _description,
-            _depositPrice,
-            _duration,
-            _percentInterest,
-            new address[](0),
-            true,
-            Status.IN_PROGRESS,
-            0
-        );
-        allInvestments.push(
-            Investment(
+    ) external {
+        if (_percentInterest >= 10 && _percentInterest <= 20) {
+            investmentCount++;
+            idToInvestment[investmentCount] = Investment(
                 investmentCount,
                 _title,
                 _description,
@@ -378,8 +373,22 @@ contract FISContract {
                 true,
                 Status.IN_PROGRESS,
                 0
-            )
-        );
+            );
+            allInvestments.push(
+                Investment(
+                    investmentCount,
+                    _title,
+                    _description,
+                    _depositPrice,
+                    _duration,
+                    _percentInterest,
+                    new address[](0),
+                    true,
+                    Status.IN_PROGRESS,
+                    0
+                )
+            );
+        } else revert NOT_IN_PERCENT_RANGE();
     }
 
     // Customer joins investment
@@ -389,13 +398,11 @@ contract FISContract {
         for (uint i = 0; i < userInvestmentsIds.length; i++) {
             bool verify = false;
             if (userInvestmentsIds[i] == id) verify = true;
-            if (verify) revert("User exists");
+            if (verify) revert USER_EXISTS();
         }
-        require(!(idToInvestment[id].open), "Not available");
-        require(
-            user.telosBalance >= idToInvestment[id].depositPrice,
-            "Insufficient funds"
-        );
+        if (!(idToInvestment[id].open)) revert NOT_AVAILABLE();
+        if (user.telosBalance >= idToInvestment[id].depositPrice)
+            revert INSUFFICIENT_FUNDS();
 
         user.investments.push(id);
         idToInvestment[id].investmentParticipants.push(msg.sender);
@@ -409,33 +416,30 @@ contract FISContract {
     }
 
     // Admin disburses profit #onlyOwner
-    function disburseProfit(uint256 id) external payable {
-        Investment storage investment = idToInvestment[id];
-        address[] memory owners = investment.investmentParticipants;
-        require(investment.open, "Investment still open");
-        require(
-            investment.status == Status.IN_PROGRESS,
-            "Investment not success or failed"
-        );
-        uint256 unitProfit = calcDisburseProfit(
-            investment.depositPrice,
-            investment.percentInterest
-        );
-        uint256 totalProfit = unitProfit * owners.length;
+    // function disburseProfit(uint256 id) external payable {
+    //     Investment storage investment = idToInvestment[id];
+    //     address[] memory owners = investment.investmentParticipants;
+    //     if (investment.open) revert NOT_AVAILABLE();
+    //     if (investment.status == Status.IN_PROGRESS) revert IN_PROGRESS();
+    //     uint256 unitProfit = calcDisburseProfit(
+    //         investment.depositPrice,
+    //         investment.percentInterest
+    //     );
+    //     uint256 totalProfit = unitProfit * owners.length;
 
-        for (uint i = 0; i < owners.length; i++) {
-            User storage user = userAddressToUserData[owners[i]];
-            if (investment.status == Status.SUCCESS) {
-                if (msg.value != totalProfit) revert INSUFFICIENT_FUNDS();
-                user.telosBalance += unitProfit;
-                user.investmentCollateral -= investment.depositPrice;
-            }
-            if (investment.status == Status.FAILED) {
-                user.rewardsEarned += user.investmentCollateral;
-                user.investmentCollateral -= investment.depositPrice;
-            }
-        }
-    }
+    //     for (uint i = 0; i < owners.length; i++) {
+    //         User storage user = userAddressToUserData[owners[i]];
+    //         if (investment.status == Status.SUCCESS) {
+    //             if (msg.value != totalProfit) revert INSUFFICIENT_FUNDS();
+    //             user.telosBalance += unitProfit;
+    //             user.investmentCollateral -= investment.depositPrice;
+    //         }
+    //         if (investment.status == Status.FAILED) {
+    //             user.rewardsEarned += user.investmentCollateral;
+    //             user.investmentCollateral -= investment.depositPrice;
+    //         }
+    //     }
+    // }
 
     // change status of investment and open or not of the investment
     function changeInvestmentStatus(
@@ -449,12 +453,12 @@ contract FISContract {
     }
 
     function withdrawForInvestment(uint amount) external onlyOwner {
-        require(investmentWallet >= amount, "Insufficient funds");
+        if (investmentWallet >= amount) revert INSUFFICIENT_FUNDS();
         unchecked {
             investmentWallet -= amount;
         }
         (bool success, ) = msg.sender.call{value: amount}("");
-        require(success, "Transfer failed");
+        if (!success) revert FAILED();
 
         emit InvestmentWithdrawn(amount);
     }
@@ -472,10 +476,10 @@ contract FISContract {
         return verify;
     }
 
-    // Getter function for token balance and telos balance
-    function circleMembers() external view returns (address[] memory) {
-        return userAddressToUserData[msg.sender].circle;
-    }
+    // Getter functions
+    // function circleMembers() external view returns (address[] memory) {
+    //     return userAddressToUserData[msg.sender].circle;
+    // }
 
     function getGroupById(uint id) external view returns (Group memory) {
         return groupById[id];
@@ -519,16 +523,14 @@ contract FISContract {
         return listOfUserTokensData;
     }
 
-    function getBalanceOfContract(
-        address tokenAddress
-    ) external view returns (uint256) {
-        IERC20 balanceOfTokenInContract = IERC20(tokenAddress);
-        return balanceOfTokenInContract.balanceOf(address(this));
-    }
+    // function getBalanceOfContract(address tokenAddress) external view returns (uint256) {
+    //     IERC20 balanceOfTokenInContract = IERC20(tokenAddress);
+    //     return balanceOfTokenInContract.balanceOf(address(this));
+    // }
 
-    function changePerentageRewardPerDay(uint256 _tokenRewards) external {
-        percentageRewardPerDay = _tokenRewards;
-    }
+    // function changePerentageRewardPerDay(uint256 _tokenRewards) external {
+    //     percentageRewardPerDay = _tokenRewards;
+    // }
 
     function calcRewardsPerSeconds(
         uint dailyRate
@@ -568,7 +570,6 @@ contract FISContract {
         return investmentWallet;
     }
 
-    // pure function to calc rent
     function calcDisburseProfit(
         uint256 depositPrice,
         uint256 percentInterest
@@ -576,10 +577,4 @@ contract FISContract {
         uint256 totalProfit = depositPrice + (percentInterest * depositPrice);
         return totalProfit;
     }
-
-    // function getTokenStatus() public view returns(uint256, uint256) {
-    //     uint256 allowance = ecdisToken.allowance(msg.sender, address(this));
-    //     uint256 balance = ecdisToken.balanceOf(msg.sender);
-    //     return (allowance, balance);
-    // }
 }
