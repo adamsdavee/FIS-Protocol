@@ -2,16 +2,14 @@
 
 pragma solidity ^0.8.7;
 
-// contract address: 0xB39C640963C368b245BfB12215bACDad33cE25FD
-
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface MintingInterface {
     function mint(address account, uint256 amount) external;
 }
 
-error NOT_APPROVED();
-error NOT_OWNER();
+error FundMe__notOwner();
+error NotOwner();
 error INSUFFICIENT_FUNDS();
 error USER_EXISTS();
 error NOT_MEMBER();
@@ -20,7 +18,7 @@ error FAILED();
 error NOT_IN_PERCENT_RANGE();
 error NOT_AVAILABLE();
 
-contract FISContract {
+contract FISContractGasOptimized {
     uint256 private groupCount;
     address private immutable i_owner;
     MintingInterface private minter;
@@ -137,7 +135,7 @@ contract FISContract {
     }
 
     modifier onlyOwner() {
-        if (msg.sender == i_owner) revert NOT_OWNER();
+        if (msg.sender == i_owner) revert NotOwner();
         _;
     }
 
@@ -149,7 +147,7 @@ contract FISContract {
         if (amount == 0) revert INSUFFICIENT_FUNDS();
         IERC20 allTokens = IERC20(tokenAddress);
         uint allowance = allTokens.allowance(msg.sender, address(this));
-        if (allowance >= amount) revert NOT_APPROVED();
+        if (allowance >= amount) revert FundMe__notOwner();
 
         userAddressToTokenToData[msg.sender][tokenAddress].saveDuration =
             block.timestamp +
@@ -366,7 +364,7 @@ contract FISContract {
         uint256 _depositPrice,
         uint256 _duration,
         uint256 _percentInterest
-    ) external {
+    ) external onlyOwner {
         if (_percentInterest >= 10 && _percentInterest <= 20) {
             investmentCount++;
             idToInvestment[investmentCount] = Investment(
@@ -422,30 +420,30 @@ contract FISContract {
     }
 
     // Admin disburses profit #onlyOwner
-    // function disburseProfit(uint256 id) external payable {
-    //     Investment storage investment = idToInvestment[id];
-    //     address[] memory owners = investment.investmentParticipants;
-    //     if (investment.open) revert NOT_AVAILABLE();
-    //     if (investment.status == Status.IN_PROGRESS) revert IN_PROGRESS();
-    //     uint256 unitProfit = calcDisburseProfit(
-    //         investment.depositPrice,
-    //         investment.percentInterest
-    //     );
-    //     uint256 totalProfit = unitProfit * owners.length;
+    function disburseProfit(uint256 id) external payable {
+        Investment storage investment = idToInvestment[id];
+        address[] memory owners = investment.investmentParticipants;
+        if (investment.open) revert NOT_AVAILABLE();
+        if (investment.status == Status.IN_PROGRESS) revert IN_PROGRESS();
+        uint256 unitProfit = calcDisburseProfit(
+            investment.depositPrice,
+            investment.percentInterest
+        );
+        uint256 totalProfit = unitProfit * owners.length;
 
-    //     for (uint i = 0; i < owners.length; i++) {
-    //         User storage user = userAddressToUserData[owners[i]];
-    //         if (investment.status == Status.SUCCESS) {
-    //             if (msg.value != totalProfit) revert INSUFFICIENT_FUNDS();
-    //             user.telosBalance += unitProfit;
-    //             user.investmentCollateral -= investment.depositPrice;
-    //         }
-    //         if (investment.status == Status.FAILED) {
-    //             user.rewardsEarned += user.investmentCollateral;
-    //             user.investmentCollateral -= investment.depositPrice;
-    //         }
-    //     }
-    // }
+        for (uint i = 0; i < owners.length; i++) {
+            User storage user = userAddressToUserData[owners[i]];
+            if (investment.status == Status.SUCCESS) {
+                if (msg.value != totalProfit) revert INSUFFICIENT_FUNDS();
+                user.telosBalance += unitProfit;
+                user.investmentCollateral -= investment.depositPrice;
+            }
+            if (investment.status == Status.FAILED) {
+                user.rewardsEarned += user.investmentCollateral;
+                user.investmentCollateral -= investment.depositPrice;
+            }
+        }
+    }
 
     // change status of investment and open or not of the investment
     function changeInvestmentStatus(

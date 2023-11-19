@@ -36,7 +36,9 @@ module.exports = async ({ deployments, getNamedAccounts }) => {
     FISContract.address
   );
   console.log(hasRole);
-  log("Role has been given........");
+  if (hasRole) {
+    log("Role has been given........");
+  }
 
   await FISCONTRACT.createInvestment(
     "Chicken Farm Investment",
